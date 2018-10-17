@@ -7,7 +7,6 @@ import {
   HttpHandler,
   DefaultSequence,
   writeResultToResponse,
-  parseOperationArgs,
   RestBindings,
   FindRouteProvider,
   InvokeMethodProvider,
@@ -21,6 +20,7 @@ import {ParameterObject, RequestBodyObject} from '@loopback/openapi-v3-types';
 import {anOpenApiSpec, anOperationSpec} from '@loopback/openapi-spec-builder';
 import {createUnexpectedHttpErrorLogger} from '../helpers';
 import * as express from 'express';
+import {ParseParamsProvider} from '../../src';
 
 const SequenceActions = RestBindings.SequenceActions;
 
@@ -319,6 +319,18 @@ describe('HttpHandler', () => {
         });
     });
 
+    it('allows customization of request body parser options', () => {
+      const body = {key: givenLargeRequest()};
+      rootContext
+        .bind(RestBindings.REQUEST_BODY_PARSER_OPTIONS)
+        .to({limit: 4 * 1024 * 1024}); // Set limit to 4MB
+      return client
+        .post('/show-body')
+        .set('content-type', 'application/json')
+        .send(body)
+        .expect(200, body);
+    });
+
     function givenLargeRequest() {
       const data = Buffer.alloc(2 * 1024 * 1024, 'A', 'utf-8');
       return data.toString();
@@ -524,7 +536,9 @@ describe('HttpHandler', () => {
   function givenHandler() {
     rootContext = new Context();
     rootContext.bind(SequenceActions.FIND_ROUTE).toProvider(FindRouteProvider);
-    rootContext.bind(SequenceActions.PARSE_PARAMS).to(parseOperationArgs);
+    rootContext
+      .bind(SequenceActions.PARSE_PARAMS)
+      .toProvider(ParseParamsProvider);
     rootContext
       .bind(SequenceActions.INVOKE_METHOD)
       .toProvider(InvokeMethodProvider);
