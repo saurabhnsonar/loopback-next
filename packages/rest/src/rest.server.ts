@@ -33,7 +33,7 @@ import {
   Route,
   RouteEntry,
   RoutingTable,
-  StaticRoute,
+  StaticAssetsRoute,
 } from './router/routing-table';
 
 import {DefaultSequence, SequenceFunction, SequenceHandler} from './sequence';
@@ -47,7 +47,6 @@ import {
   Send,
 } from './types';
 import {ServerOptions} from 'https';
-import * as HttpErrors from 'http-errors';
 
 const debug = require('debug')('loopback:rest:server');
 
@@ -194,20 +193,8 @@ export class RestServer extends Context implements Server, HttpServerLike {
     this.bind(RestBindings.HANDLER).toDynamicValue(() => this.httpHandler);
 
     // LB4's static assets serving router
-    const staticAssetsRouter = new StaticRoute(
-      (req: Request, res: Response) => {
-        return new Promise((resolve, reject) => {
-          const onFinished = () => resolve();
-          res.once('finish', onFinished);
-          this._routerForStaticAssets.handle(req, res, (err: Error) => {
-            if (err) {
-              return reject(err);
-            }
-            // Express router called next, which means no route was matched
-            return reject(new HttpErrors.NotFound());
-          });
-        });
-      },
+    const staticAssetsRouter = new StaticAssetsRoute(
+      this._routerForStaticAssets,
     );
 
     this.httpHandler.registerRoute(staticAssetsRouter);

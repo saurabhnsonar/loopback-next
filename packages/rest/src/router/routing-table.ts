@@ -22,6 +22,7 @@ import {inspect} from 'util';
 
 import {
   Request,
+  Response,
   PathParameterValues,
   OperationArgs,
   OperationRetval,
@@ -32,11 +33,13 @@ import {RestBindings} from '../keys';
 import {ControllerSpec} from '@loopback/openapi-v3';
 
 import * as assert from 'assert';
+import * as express from 'express';
 const debug = require('debug')('loopback:rest:routing-table');
 
 import {CoreBindings} from '@loopback/core';
 import {validateApiPath} from './openapi-path';
 import {TrieRouter} from './trie-router';
+import {RequestContext} from '../request-context';
 
 /**
  * A controller instance with open properties/methods
@@ -73,8 +76,6 @@ export interface RestRouter {
    * @returns The resolved route, if not found, `undefined` is returned
    */
   find(request: Request): ResolvedRoute | undefined;
-
-  getStaticAssetsRouter(): ResolvedRoute;
 
   /**
    * List all routes
@@ -135,6 +136,8 @@ export class RoutingTable {
     return fullPath;
   }
 
+  private _staticAssetsRoute: ResolvedRoute;
+
   /**
    * Register a route
    * @param route A route entry
@@ -154,6 +157,9 @@ export class RoutingTable {
 
     validateApiPath(route.path);
     this._router.add(route);
+    if (route.path === '*') {
+      this._staticAssetsRoute = createResolvedRoute(route, {});
+    }
   }
 
   describeApiPaths(): PathObject {
@@ -184,8 +190,12 @@ export class RoutingTable {
       return found;
     }
 
-    const staticAssetsRouter = this._router.getStaticAssetsRouter();
-    return staticAssetsRouter;
+    debug(
+      'No API route found for %s %s, trying to find a static assets',
+      request.method,
+      request.path,
+    );
+    return this._staticAssetsRoute;
   }
 }
 
@@ -240,24 +250,42 @@ export interface ResolvedRoute extends RouteEntry {
   readonly schemas: SchemasObject;
 }
 
-export class StaticRoute implements RouteEntry {
+export class StaticAssetsRoute implements RouteEntry {
   public readonly verb: string = 'get';
   public readonly path: string = '*';
   public readonly spec: OperationObject = {responses: {}};
+  private _handler: Function;
 
-  constructor(private _handler: Function) {}
+  constructor(private _routerForStaticAssets: express.Router) {
+    this._handler = (request: Request, response: Response) => {
+      return new Promise((resolve, reject) => {
+        const onFinished = () => resolve();
+        response.once('finish', onFinished);
+        this._routerForStaticAssets.handle(request, response, (err: Error) => {
+          if (err) {
+            return reject(err);
+          }
+          // Express router called next, which means no route was matched
+          return reject(
+            new HttpErrors.NotFound(
+              `Endpoint "${request.method} ${request.path}" not found.`,
+            ),
+          );
+        });
+      });
+    };
+  }
 
   updateBindings(requestContext: Context): void {
     // no-op
   }
 
   async invokeHandler(
-    requestContext: Context,
+    requestContext: RequestContext,
     args: OperationArgs,
   ): Promise<OperationRetval> {
-    const req = await requestContext.get(RestBindings.Http.REQUEST);
-    const res = await requestContext.get(RestBindings.Http.RESPONSE);
-    return this._handler(req, res);
+    const {request, response} = requestContext;
+    return this._handler(request, response);
   }
 
   describe(): string {
