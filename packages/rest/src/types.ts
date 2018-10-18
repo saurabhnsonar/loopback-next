@@ -6,6 +6,12 @@
 import {Binding, BoundValue} from '@loopback/context';
 import {ResolvedRoute, RouteEntry} from './router/routing-table';
 import {Request, Response} from 'express';
+import {
+  Options,
+  OptionsJson,
+  OptionsUrlencoded,
+  OptionsText,
+} from 'body-parser';
 
 export {Request, Response};
 
@@ -81,11 +87,9 @@ export type LogError = (
 /**
  * Options for request body parsing
  */
-export type RequestBodyParserOptions = {
-  limit?: number;
-  encoding?: string;
-  [property: string]: any;
-};
+export type RequestBodyParserOptions = OptionsJson &
+  OptionsUrlencoded &
+  OptionsText;
 
 export type PathParameterValues = {[key: string]: any};
 export type OperationArgs = any[];

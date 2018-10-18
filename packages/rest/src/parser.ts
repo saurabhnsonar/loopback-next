@@ -11,11 +11,9 @@ import {
   SchemasObject,
 } from '@loopback/openapi-v3-types';
 import * as debugModule from 'debug';
-import {IncomingMessage} from 'http';
 import * as HttpErrors from 'http-errors';
 import * as parseUrl from 'parseurl';
 import {parse as parseQuery} from 'qs';
-import {promisify} from 'util';
 import {coerceParameter} from './coercion/coerce-parameter';
 import {RestHttpErrors} from './index';
 import {ResolvedRoute} from './router/routing-table';
@@ -23,9 +21,13 @@ import {
   OperationArgs,
   PathParameterValues,
   Request,
+  Response,
   RequestBodyParserOptions,
 } from './types';
 import {validateRequestBody} from './validation/request-body.validator';
+
+import {json, urlencoded, text} from 'body-parser';
+import * as typeis from 'type-is';
 
 type HttpError = HttpErrors.HttpError;
 
@@ -39,31 +41,6 @@ type RequestBody = {
   value: any | undefined;
   coercionRequired?: boolean;
 };
-
-const parseJsonBody: (
-  req: IncomingMessage,
-  options: {},
-) => Promise<any> = promisify(require('body/json'));
-
-const parseFormBody: (
-  req: IncomingMessage,
-  options: {},
-) => Promise<any> = promisify(require('body/form'));
-
-/**
- * Get the content-type header value from the request
- * @param req Http request
- */
-function getContentType(req: Request): string | undefined {
-  const val = req.headers['content-type'];
-  if (typeof val === 'string') {
-    return val;
-  } else if (Array.isArray(val)) {
-    // Assume only one value is present
-    return val[0];
-  }
-  return undefined;
-}
 
 /**
  * Parses the request to derive arguments to be passed in for the Application
@@ -90,7 +67,9 @@ export async function parseOperationArgs(
   );
 }
 
-async function loadRequestBodyIfNeeded(
+const DEFAULT_LIMIT = '1mb';
+
+function loadRequestBodyIfNeeded(
   operationSpec: OperationObject,
   request: Request,
   options: RequestBodyParserOptions = {},
@@ -99,45 +78,54 @@ async function loadRequestBodyIfNeeded(
 
   debug('Request body parser options: %j', options);
 
-  const contentType = getContentType(request);
-  debug('Loading request body with content type %j', contentType);
+  // A hack to fool TypeScript as we don't need `response`
+  const response = ({} as any) as Response;
 
-  if (
-    contentType &&
-    contentType.startsWith('application/x-www-form-urlencoded')
-  ) {
-    const body = await parseFormBody(request, options).catch(
-      (err: HttpError) => {
-        debug('Cannot parse request body %j', err);
-        if (!err.statusCode || err.statusCode >= 500) {
-          err.statusCode = 400;
-        }
-        throw err;
-      },
-    );
-    // form parser returns an object with prototype
-    return {
-      value: Object.assign({}, body),
-      coercionRequired: true,
-    };
-  }
-
-  if (contentType && !/json/.test(contentType)) {
-    throw new HttpErrors.UnsupportedMediaType(
-      `Content-type ${contentType} is not supported.`,
-    );
-  }
-
-  const jsonBody = await parseJsonBody(request, options).catch(
-    (err: HttpError) => {
+  return new Promise<RequestBody>((resolve, reject) => {
+    const handleError = (err: HttpError) => {
       debug('Cannot parse request body %j', err);
       if (!err.statusCode || err.statusCode >= 500) {
         err.statusCode = 400;
       }
-      throw err;
-    },
-  );
-  return {value: jsonBody};
+      return err;
+    };
+    let coercionRequired = false;
+    const jsonOptions = Object.assign(
+      {type: 'json', limit: DEFAULT_LIMIT},
+      options,
+    );
+    json(jsonOptions)(request, response, (err1: HttpError) => {
+      if (err1) return reject(handleError(err1));
+      const urlencodedOptions = Object.assign(
+        {
+          extended: true,
+          type: 'urlencoded',
+          limit: DEFAULT_LIMIT,
+        },
+        options,
+      );
+      urlencoded(urlencodedOptions)(request, response, (err2: HttpError) => {
+        if (err2) return reject(handleError(err2));
+        coercionRequired = true;
+        const textOptions = Object.assign(
+          {type: 'text', limit: DEFAULT_LIMIT},
+          options,
+        );
+        text(textOptions)(request, response, (err3: HttpError) => {
+          if (err3) return reject(handleError(err3));
+          if (!typeis(request, 'json', 'urlencoded', 'text')) {
+            reject(
+              new HttpErrors.UnsupportedMediaType(
+                `Content-type ${request.get('content-type')} is not supported.`,
+              ),
+            );
+          } else {
+            resolve({value: request.body, coercionRequired});
+          }
+        });
+      });
+    });
+  });
 }
 
 function buildOperationArguments(
